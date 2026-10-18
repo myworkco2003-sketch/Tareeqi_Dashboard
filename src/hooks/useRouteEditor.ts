@@ -71,6 +71,11 @@ export function useRouteEditor(
       return
     }
 
+    // المسار السابق لم يعد صالحاً بعد تغيير النقاط
+    draftCoords.current = []
+    showDraft(null)
+    setHasRoute(false)
+
     setBusy(true)
     setError('')
 
@@ -210,7 +215,9 @@ export function useRouteEditor(
   }
 
   const save = async () => {
-    if (saving) return
+    if (saving || busy || !hasRoute || draftCoords.current.length < 2) {
+      return
+    }
 
     const payload = {
       route_name: name.trim(),

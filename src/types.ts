@@ -1,41 +1,43 @@
 export type Page = 'dashboard' | 'routes' | 'routes-map'
-
-// [lon, lat]
 export type LngLat = [number, number]
+export type LineGeometry = { type: 'LineString'; coordinates: number[][] }
 
-export type LineGeometry = {
-  type: 'LineString'
-  coordinates: number[][]
-}
-
-// خط بالقائمة (GET /admin/routes)
-export type RouteSummary = {
+export type Bus = {
   id: number
-  route_name: string
-  color: string
+  name: string
+  color: string | null
+  old_price: number | null
+  new_price: number | null
   is_active: boolean
 }
+export type BusSavePayload = Omit<Bus, 'id'>
 
-// خط على الخريطة (GET /admin/routes/map)
-export type MapRoute = {
+export type RouteSummary = {
   id: number
-  route_name: string
-  color: string
-  fare: number | null
-  geometry: LineGeometry
+  bus_id: number
+  bus: Bus
+  version: number
+  line_string: LineGeometry
+  distance: number | null
+  trip_time: number | null
+  direction: string
+  start_point: { type: 'Point'; coordinates: LngLat } | null
+  end_point: { type: 'Point'; coordinates: LngLat } | null
+  is_active: boolean
 }
-
-// اللي منبعته للحفظ والتعديل
+export type MapRoute = RouteSummary & { geometry: LineGeometry }
 export type RouteSavePayload = {
-  route_name: string
-  color: string
-  fare: number
+  bus_id: number
+  direction: string
+  is_active: boolean
   geometry: LineGeometry
+  distance: number
+  trip_time: number
 }
-
-// نتيجة حساب المسار من BRouter
 export type CalculatedRoute = {
   geometry: LineGeometry
-  distance_m: number
-  duration_minutes: number
+  distance: number
+  trip_time: number
+  duration_seconds?: number
+  duration_minutes?: number
 }

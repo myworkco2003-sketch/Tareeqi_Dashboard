@@ -1,10 +1,16 @@
+
 import { useEffect, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import * as maplibregl from 'maplibre-gl'
-import { calculateRoute, createRoute, updateRoute } from '../api'
+import {
+  addDirectionToBus,
+  calculateRoute,
+  createRoute,
+  updateRoute,
+} from '../api'
 import { nearestIdx, sampleWaypoints } from '../lib/geo'
 import { EMPTY, setSourceData } from '../map/setup'
-import type { LineGeometry, LngLat, MapRoute } from '../types'
+import type { Direction, LineGeometry, LngLat, MapRoute } from '../types'
 
 const DEFAULT_COLOR = '#2563eb'
 
@@ -21,9 +27,13 @@ export function useRouteEditor(
 
   const [editing, setEditing] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
+  const [addingToBusId, setAddingToBusId] = useState<number | null>(null)
   const [name, setName] = useState('')
   const [color, setColor] = useState(DEFAULT_COLOR)
   const [fare, setFare] = useState('')
+  const [direction, setDirection] = useState<Direction>('ذهاب')
+  const [startPoint, setStartPoint] = useState('')
+  const [endPoint, setEndPoint] = useState('')
   const [count, setCount] = useState(0)
   const [hasRoute, setHasRoute] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -34,7 +44,6 @@ export function useRouteEditor(
     editingRef.current = editing
   }, [editing])
 
-  // ننظف الـ timer والنقاط إذا انغلقت الصفحة
   useEffect(() => {
     return () => {
       window.clearTimeout(timer.current)
@@ -58,7 +67,7 @@ export function useRouteEditor(
     )
   }
 
-  // حساب المسار من BRouter (عن طريق الباك إند) وعرضه كخط مؤقت
+  // حساب المسار من BRouter وعرضه كخط مؤقت
   const requestRoute = () => {
     window.clearTimeout(timer.current)
     const id = ++reqId.current
@@ -71,7 +80,7 @@ export function useRouteEditor(
       return
     }
 
-    // المسار السابق لم يعد صالحاً بعد تغيير النقاط
+    // إلغاء صلاحية المسار السابق عند تغيير النقاط
     draftCoords.current = []
     showDraft(null)
     setHasRoute(false)
@@ -87,7 +96,8 @@ export function useRouteEditor(
 
       try {
         const data = await calculateRoute(points)
-        if (id !== reqId.current) return // جاء طلب أحدث، تجاهل هاد
+        if (id !== reqId.current) return
+
         draftCoords.current = data.geometry.coordinates
         showDraft(data.geometry)
         setHasRoute(true)
@@ -116,7 +126,11 @@ export function useRouteEditor(
     const el = document.createElement('div')
     el.className = 'wp-marker'
 
-    const marker = new maplibregl.Marker({ element: el, draggable: true, anchor: 'center' })
+    const marker = new maplibregl.Marker({
+      element: el,
+      draggable: true,
+      anchor: 'center',
+    })
       .setLngLat(lngLat)
       .addTo(map)
 
@@ -135,25 +149,30 @@ export function useRouteEditor(
     if (!skipRequest) requestRoute()
   }
 
-  // مكان إدراج نقطة جديدة لما المستخدم يضغط على الخط
+  // مكان إدراج نقطة جديدة عند الضغط على الخط
   const insertIndexFor = (p: LngLat) => {
     const coords = draftCoords.current
     if (!coords.length) return undefined
+
     const clickIdx = nearestIdx(coords, p)
     const wpIdx = markersRef.current.map((m) => {
       const ll = m.getLngLat()
       return nearestIdx(coords, [ll.lng, ll.lat])
     })
+
     const at = wpIdx.findIndex((i) => i > clickIdx)
     return at === -1 ? undefined : at
   }
 
-  // ضغطة على الخريطة: نقطة جديدة، أو إدراج نقطة إذا الضغطة على الخط
+  // الضغط على الخريطة: إضافة نقطة أو إدراجها على الخط
   const onMapClick = (e: maplibregl.MapMouseEvent) => {
     const map = mapRef.current
     if (!map || !editingRef.current) return
+
     const p: LngLat = [e.lngLat.lng, e.lngLat.lat]
-    const onLine = map.queryRenderedFeatures(e.point, { layers: ['draft-line'] }).length > 0
+    const onLine =
+      map.queryRenderedFeatures(e.point, { layers: ['draft-line'] }).length > 0
+
     addWaypoint(p, onLine ? insertIndexFor(p) : undefined)
   }
 
@@ -177,6 +196,10 @@ export function useRouteEditor(
     setName('')
     setColor(DEFAULT_COLOR)
     setFare('')
+    setDirection('ذهاب')
+    setStartPoint('')
+    setEndPoint('')
+    setAddingToBusId(null)
   }
 
   const startEdit = (r: MapRoute) => {
@@ -186,11 +209,14 @@ export function useRouteEditor(
     setName(r.route_name)
     setColor(r.color)
     setFare(r.fare != null ? String(r.fare) : '')
+    setDirection(r.direction)
+    setStartPoint(r.start_point)
+    setEndPoint(r.end_point)
+    setAddingToBusId(null)
 
     const coords = r.geometry.coordinates
     sampleWaypoints(coords).forEach((p) => addWaypoint(p, undefined, true))
 
-    // منعرض الخط القديم متل ما هو، ومنحسبه من جديد بس إذا المستخدم غيّر شي
     draftCoords.current = coords
     showDraft(r.geometry)
     setHasRoute(true)
@@ -203,10 +229,30 @@ export function useRouteEditor(
     }
   }
 
+  const startAddDirection = (
+    r: MapRoute,
+    newDirection: Direction,
+  ) => {
+    resetDraft()
+    setEditing(true)
+    setEditingId(null)
+    setAddingToBusId(r.bus_id)
+
+    // بيانات الباص مشتركة بين الاتجاهين
+    setName(r.route_name)
+    setColor(r.color)
+    setFare(r.fare != null ? String(r.fare) : '')
+
+    setDirection(newDirection)
+    setStartPoint('')
+    setEndPoint('')
+  }
+
   const cancel = () => {
     resetDraft()
     setEditing(false)
     setEditingId(null)
+    setAddingToBusId(null)
   }
 
   const undo = () => {
@@ -215,22 +261,53 @@ export function useRouteEditor(
   }
 
   const save = async () => {
-    if (saving || busy || !hasRoute || draftCoords.current.length < 2) {
+    if (
+      saving ||
+      busy ||
+      !hasRoute ||
+      draftCoords.current.length < 2 ||
+      !name.trim() ||
+      fare === '' ||
+      Number(fare) < 0 ||
+      !startPoint.trim() ||
+      !endPoint.trim()
+    ) {
       return
     }
 
+    // إرسال نقاط التحكم المرسومة على الخريطة، وليس geometry الناتج
+    const waypoints: LngLat[] = markersRef.current.map((m) => {
+      const p = m.getLngLat()
+      return [p.lng, p.lat]
+    })
+
     const payload = {
-      route_name: name.trim(),
+      name: name.trim(),
       color,
-      fare: Number(fare),
-      geometry: { type: 'LineString' as const, coordinates: draftCoords.current },
+      price: Number(fare),
+      direction,
+      start_point: startPoint.trim(),
+      end_point: endPoint.trim(),
+      waypoints,
     }
 
     setSaving(true)
     setError('')
+
     try {
-      if (editingId) await updateRoute(editingId, payload)
-      else await createRoute(payload)
+      if (editingId !== null) {
+        await updateRoute(editingId, payload)
+      } else if (addingToBusId !== null) {
+        await addDirectionToBus(addingToBusId, {
+          direction,
+          start_point: startPoint.trim(),
+          end_point: endPoint.trim(),
+          waypoints,
+        })
+      } else {
+        await createRoute(payload)
+      }
+
       await onSaved()
       cancel()
     } catch (e) {
@@ -250,6 +327,12 @@ export function useRouteEditor(
     setColor,
     fare,
     setFare,
+    direction,
+    setDirection,
+    startPoint,
+    setStartPoint,
+    endPoint,
+    setEndPoint,
     count,
     hasRoute,
     busy,
@@ -262,6 +345,8 @@ export function useRouteEditor(
     undo,
     save,
     onMapClick,
+    addingToBusId,
+    startAddDirection,
   }
 }
 
